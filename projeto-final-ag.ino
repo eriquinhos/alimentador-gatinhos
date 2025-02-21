@@ -1,37 +1,49 @@
 #include <LiquidCrystal.h>
 
-// Pin definitions
-#define DISPENSER_LED_PIN 9
-#define FOOD_LEVEL_LED_PIN 10
-#define POTENTIOMETER_PIN A0
+// Pin Planner
+#define FEEDING_LED 9
+#define FOOD_LEVEL_LED_PIN_LOW 10
+#define FOOD_LEVEL_LED_PIN_MEDIUM 11
+#define FOOD_LEVEL_LED_PIN_HIGH 12
+#define LDR1 A0
+#define LDR2 A1
+#define LDR3 A2
+
 #define LCD_RS 22
 #define LCD_EN 24
-#define LCD_D4 26 
+#define LCD_D4 26
 #define LCD_D5 28
 #define LCD_D6 30
 #define LCD_D7 32
 
-// Objects
+// Definição Display LCD
 LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 
 // Variables
 unsigned long lastFeedTime = 0;
-const unsigned long feedInterval = 21600000; // 6 hours in milliseconds
+const unsigned long feedInterval = 60000; // 1 minuto para teste
 int foodAmount = 0;
 const int maxFoodAmount = 100;
+
+void fadeLED(int, int, int, int, int);
+void feedCat();
+void updateFoodLevel();
+void updateLCD(unsigned long);
 
 void setup()
 {
     Serial.begin(9600);
-    Serial1.begin(9600); // UART communication with PIC
+    Serial1.begin(9600); // Comunicação serial com o PIC
 
     // Initialize LEDs
-    pinMode(DISPENSER_LED_PIN, OUTPUT);
-    pinMode(FOOD_LEVEL_LED_PIN, OUTPUT);
+    pinMode(FEEDING_LED, OUTPUT);
+    pinMode(FOOD_LEVEL_LED_PIN_LOW, OUTPUT);
+    pinMode(FOOD_LEVEL_LED_PIN_MEDIUM, OUTPUT);
+    pinMode(FOOD_LEVEL_LED_PIN_HIGH, OUTPUT);
 
     // Initialize LCD
     lcd.begin(16, 2);
-    lcd.print("Cat Feeder Sim");
+    lcd.print("Kitty Feeder");
 
     // Set up Timer1 for 1 second interrupt
     noInterrupts();
@@ -49,38 +61,55 @@ void loop()
 {
     static unsigned long currentTime = 0;
 
-    // Check if it's time to feed
-    if (currentTime - lastFeedTime >= feedInterval)
+    
+    if (Serial1.available() >= 3)
+    {
+        int hours = Serial1.read();
+        int minutes = Serial1.read();
+        int seconds = Serial1.read();
+
+        updateLCD(hours, minutes, seconds);
+
+        currentTime = (hours * 3600000UL) + (minutes * 60000UL) + (seconds * 1000UL);
+    }
+
+    updateLCD(millis() / 1000 / 60 / 60, (millis() / 1000 / 60) % 60, (millis() / 1000) % 60);
+
+    updateFoodLevel();
+
+    if (millis() - lastFeedTime >= feedInterval)
     {
         feedCat();
     }
 
-    // Update LCD
-    updateLCD(currentTime);
-
-    // Read potentiometer for food amount
-    foodAmount = map(analogRead(POTENTIOMETER_PIN), 0, 1023, 0, maxFoodAmount);
-
-    // Update food level LED
-    analogWrite(FOOD_LEVEL_LED_PIN, map(foodAmount, 0, maxFoodAmount, 0, 255));
-
-    // Check for commands from PIC
+    // Verifica comandos do PIC para alimentação
     if (Serial1.available())
     {
         char command = Serial1.read();
         if (command == 'F')
         {
             feedCat();
+            Serial1.write('D');
         }
-        else if (command == 'T')
+    }
+}
+
+void fadeLED(int pin, int start, int end, int step, int delayTime)
+{
+    if (start < end)
+    {
+        for (int i = start; i <= end; i += step)
         {
-            // Receive time update from PIC
-            while (Serial1.available() < 4)
-                ;                                     // Wait for 4 bytes
-            currentTime = Serial1.read() * 3600000UL; // Hours
-            currentTime += Serial1.read() * 60000UL;  // Minutes
-            currentTime += Serial1.read() * 1000UL;   // Seconds
-            currentTime += Serial1.read() * 10UL;     // Tenths of a second
+            analogWrite(pin, i);
+            delay(delayTime);
+        }
+    }
+    else
+    {
+        for (int i = start; i >= end; i -= step)
+        {
+            analogWrite(pin, i);
+            delay(delayTime);
         }
     }
 }
@@ -90,10 +119,9 @@ void feedCat()
     lcd.clear();
     lcd.print("Feeding...");
 
-    // Simulate opening food dispenser
-    digitalWrite(DISPENSER_LED_PIN, HIGH);
-    delay(2000); // Simulate dispensing time
-    digitalWrite(DISPENSER_LED_PIN, LOW);
+    fadeLED(FEEDING_LED, 0, 255, 5, 30);
+    delay(2000);
+    fadeLED(FEEDING_LED, 255, 0, 5, 30);
 
     lastFeedTime = millis();
     lcd.clear();
@@ -101,38 +129,74 @@ void feedCat()
     lcd.print(foodAmount);
     lcd.print(" units");
 
-    // Reset food amount for next feeding
     foodAmount = 0;
+
+    Serial.write('D');
+}
+
+void updateFoodLevel()
+{
+    int ldr1 = analogRead(LDR1);
+    int ldr2 = analogRead(LDR2);
+    int ldr3 = analogRead(LDR3);
+
+    int lumus = 500;
+    bool covered1 = ldr1 < lumus;
+    bool covered2 = ldr2 < lumus;
+    bool covered3 = ldr3 < lumus;
+
+    digitalWrite(FOOD_LEVEL_LED_PIN_LOW, LOW);
+    digitalWrite(FOOD_LEVEL_LED_PIN_MEDIUM, LOW);
+    digitalWrite(FOOD_LEVEL_LED_PIN_HIGH, LOW);
+
+    // Atualiza foodAmount com base no nível detectado
+    if (covered1 && !covered2 && !covered3)
+    {
+        foodAmount = 33;
+        digitalWrite(FOOD_LEVEL_LED_PIN_LOW, HIGH);
+    }
+    else if (covered1 && covered2 && !covered3)
+    {
+        foodAmount = 66;
+        digitalWrite(FOOD_LEVEL_LED_PIN_MEDIUM, HIGH);
+    }
+    else if (covered1 && covered2 && covered3)
+    {
+        foodAmount = 100;
+        digitalWrite(FOOD_LEVEL_LED_PIN_HIGH, HIGH);
+    }
+    else
+    {
+        foodAmount = 0;
+    }
 }
 
 void updateLCD(unsigned long currentTime)
 {
     unsigned long seconds = currentTime / 1000;
-    int hours = seconds / 3600;
+    int hours = (seconds / 3600) % 24;
     int minutes = (seconds % 3600) / 60;
 
     lcd.setCursor(0, 0);
     lcd.print("Time: ");
-    if (hours < 10)
-        lcd.print('0');
+    lcd.print((hours < 10) ? "0" : "");
     lcd.print(hours);
     lcd.print(':');
-    if (minutes < 10)
-        lcd.print('0');
+    lcd.print((minutes < 10) ? "0" : "");
     lcd.print(minutes);
+
+    unsigned long nextFeed = lastFeedTime + feedInterval;
+    unsigned long nextSeconds = nextFeed / 1000;
+    int nextHours = (nextSeconds / 3600) % 24;
+    int nextMinutes = (nextSeconds % 3600) / 60;
 
     lcd.setCursor(0, 1);
     lcd.print("Next: ");
-    unsigned long nextFeed = lastFeedTime + feedInterval;
-    hours = (nextFeed / 3600000) % 24;
-    minutes = (nextFeed / 60000) % 60;
-    if (hours < 10)
-        lcd.print('0');
-    lcd.print(hours);
+    lcd.print((nextHours < 10) ? "0" : "");
+    lcd.print(nextHours);
     lcd.print(':');
-    if (minutes < 10)
-        lcd.print('0');
-    lcd.print(minutes);
+    lcd.print((nextMinutes < 10) ? "0" : "");
+    lcd.print(nextMinutes);
 }
 
 ISR(TIMER1_COMPA_vect)
